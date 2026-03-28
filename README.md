@@ -6,7 +6,8 @@ A projector displays the game on the wall. A camera watches the wall. When you p
 
 Built as a fun activity for kids.
 
-https://github.com/user-attachments/assets/stickyBounce-demo.mp4
+
+https://github.com/user-attachments/assets/4deaa797-0e5c-4e14-b26e-3761d536cb90
 
 ---
 
@@ -15,6 +16,10 @@ https://github.com/user-attachments/assets/stickyBounce-demo.mp4
 ```
 Webcam (iPhone)
      │
+
+Uploading stickyBounce-demo.mp4…
+
+
      ▼
 Python + OpenCV  ──── detects yellow sticky notes (position + angle)
      │
