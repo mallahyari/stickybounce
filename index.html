@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ball Falling</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; display: flex;
+           justify-content: center; align-items: center; height: 100vh; }
+    canvas { display: block; }
+    #status {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.4); font: 14px/1 monospace;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">F = fullscreen · D = debug outlines</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+// ── Canvas / screen size ───────────────────────────────────────────────────
+// Change these to match your projector's resolution if needed.
+const W = 1920, H = 1080;
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+canvas.width  = W;
+canvas.height = H;
+
+function fitCanvas() {
+  const scale = Math.min(innerWidth / W, innerHeight / H);
+  canvas.style.width  = W * scale + 'px';
+  canvas.style.height = H * scale + 'px';
+}
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+
+
+// ── Calibration mode (?calibrate in URL) ──────────────────────────────────
+const IS_CALIBRATE = location.search.includes('calibrate');
+// These must match SCREEN_POINTS in calibrate.py
+const CAL_POINTS = [
+  [W * 0.1, H * 0.1],
+  [W * 0.9, H * 0.1],
+  [W * 0.9, H * 0.9],
+  [W * 0.1, H * 0.9],
+];
+
+
+// ── Matter.js setup ────────────────────────────────────────────────────────
+const { Engine, World, Bodies, Body, Events } = Matter;
+const engine = Engine.create({ gravity: { x: 0, y: 1.5 } });
+const world  = engine.world;
+
+// Static boundary walls (floor + sides, no ceiling — balls enter from top)
+World.add(world, [
+  Bodies.rectangle(W / 2,  H + 50,  W,   100, { isStatic: true }),  // floor
+  Bodies.rectangle(-50,    H / 2,   100, H,   { isStatic: true }),  // left
+  Bodies.rectangle(W + 50, H / 2,   100, H,   { isStatic: true }),  // right
+]);
+
+
+// ── Ball management ────────────────────────────────────────────────────────
+const BALL_RADIUS  = 18;
+const BALL_COLORS  = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#ff9ff3', '#ff9f43', '#a29bfe'];
+const SPAWN_INTERVAL_MS = 1400;
+const MAX_BALLS    = 40;   // remove oldest when exceeded
+const TRAIL_LENGTH = 14;
+
+const balls = [];
+
+function spawnBall() {
+  if (balls.length >= MAX_BALLS) {
+    const oldest = balls.shift();
+    World.remove(world, oldest);
+  }
+
+  const x    = W / 2;
+  const ball = Bodies.circle(x, -BALL_RADIUS - 10, BALL_RADIUS, {
+    restitution: 0.65,
+    friction:    0.08,
+    frictionAir: 0.001,
+    density:     0.002,
+  });
+  ball.gameColor = BALL_COLORS[Math.floor(Math.random() * BALL_COLORS.length)];
+  ball.trail     = [];
+
+  World.add(world, ball);
+  balls.push(ball);
+}
+
+setInterval(spawnBall, SPAWN_INTERVAL_MS);
+
+
+// ── Sticky-note physics bodies ─────────────────────────────────────────────
+let noteBodies = [];
+
+function updateNotes(notes) {
+  noteBodies.forEach(b => World.remove(world, b));
+  noteBodies = [];
+
+  for (const note of notes) {
+    const angleRad = note.angle * Math.PI / 180;
+    const body = Bodies.rectangle(note.x, note.y, note.width, note.height, {
+      isStatic:    true,
+      angle:       angleRad,
+      friction:    0.3,
+      restitution: 0.4,
+    });
+    noteBodies.push(body);
+    World.add(world, body);
+  }
+}
+
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+let wsStatus = 'connecting…';
+
+function connect() {
+  const ws = new WebSocket('ws://localhost:8765');
+
+  ws.onopen = () => {
+    wsStatus = 'connected';
+    console.log('[ws] connected');
+  };
+
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    updateNotes(data.notes);
+  };
+
+  ws.onclose = () => {
+    wsStatus = 'disconnected — retrying…';
+    console.warn('[ws] closed, retrying in 2s');
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+
+
+// ── Cleanup balls that fell off screen ────────────────────────────────────
+function cleanup() {
+  for (let i = balls.length - 1; i >= 0; i--) {
+    if (balls[i].position.y > H + 200) {
+      World.remove(world, balls[i]);
+      balls.splice(i, 1);
+    }
+  }
+}
+
+
+// ── Rendering ─────────────────────────────────────────────────────────────
+let debugMode = false;
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function drawBalls() {
+  for (const ball of balls) {
+    const { x, y } = ball.position;
+
+    // Update trail
+    ball.trail.push({ x, y });
+    if (ball.trail.length > TRAIL_LENGTH) ball.trail.shift();
+
+    // Draw trail
+    const rgb = hexToRgb(ball.gameColor);
+    for (let i = 1; i < ball.trail.length; i++) {
+      const alpha = (i / ball.trail.length) * 0.35;
+      const width = BALL_RADIUS * 1.2 * (i / ball.trail.length);
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+      ctx.lineWidth   = width;
+      ctx.lineCap     = 'round';
+      ctx.moveTo(ball.trail[i - 1].x, ball.trail[i - 1].y);
+      ctx.lineTo(ball.trail[i].x,     ball.trail[i].y);
+      ctx.stroke();
+    }
+
+    // Glow + ball
+    ctx.save();
+    ctx.shadowBlur  = 28;
+    ctx.shadowColor = ball.gameColor;
+    ctx.fillStyle   = ball.gameColor;
+    ctx.beginPath();
+    ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Specular highlight
+    ctx.shadowBlur  = 0;
+    ctx.fillStyle   = 'rgba(255,255,255,0.35)';
+    ctx.beginPath();
+    ctx.arc(x - BALL_RADIUS * 0.3, y - BALL_RADIUS * 0.3, BALL_RADIUS * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawNoteOutlines() {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 80, 80, 0.75)';
+  ctx.lineWidth   = 2;
+  for (const body of noteBodies) {
+    const verts = body.vertices;
+    ctx.beginPath();
+    ctx.moveTo(verts[0].x, verts[0].y);
+    for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCalibrationMarkers() {
+  const labels = ['1', '2', '3', '4'];
+  for (let i = 0; i < CAL_POINTS.length; i++) {
+    const [cx, cy] = CAL_POINTS[i];
+    ctx.save();
+    ctx.shadowBlur  = 24;
+    ctx.shadowColor = '#ff0000';
+    ctx.fillStyle   = '#ff0000';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle  = '#ffffff';
+    ctx.font       = 'bold 22px Arial';
+    ctx.textAlign  = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(labels[i], cx, cy);
+    ctx.restore();
+  }
+
+  ctx.fillStyle    = 'rgba(255,255,255,0.7)';
+  ctx.font         = '28px Arial';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('CALIBRATION MODE — run: uv run calibrate.py', W / 2, H / 2);
+}
+
+function render() {
+  // Semi-transparent clear for motion-blur feel
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  ctx.fillRect(0, 0, W, H);
+
+  drawBalls();
+  if (debugMode)      drawNoteOutlines();
+  if (IS_CALIBRATE)   drawCalibrationMarkers();
+
+  // WS status (top-left, subtle)
+  ctx.fillStyle    = 'rgba(255,255,255,0.2)';
+  ctx.font         = '13px monospace';
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`ws: ${wsStatus}   balls: ${balls.length}   notes: ${noteBodies.length}`, 16, 16);
+
+  requestAnimationFrame(render);
+}
+
+
+// ── Physics loop ───────────────────────────────────────────────────────────
+(function physicsLoop() {
+  Engine.update(engine, 1000 / 60);
+  cleanup();
+  setTimeout(physicsLoop, 1000 / 60);
+})();
+
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen();
+  if (e.key === 'd' || e.key === 'D') debugMode = !debugMode;
+});
+
+
+// ── Start ──────────────────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>
