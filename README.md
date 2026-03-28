@@ -6,6 +6,8 @@ A projector displays the game on the wall. A camera watches the wall. When you p
 
 Built as a fun activity for kids.
 
+https://github.com/user-attachments/assets/stickyBounce-demo.mp4
+
 ---
 
 ## How it works
@@ -77,6 +79,8 @@ uv run calibrate.py
 ```
 
 **Step 3:** In the camera window that opens, **left-click each red dot in order** (1 → 2 → 3 → 4) as you see them projected on the wall.
+
+![Calibration](calibration.png)
 
 Calibration is saved to `calibration.npz` and loaded automatically from then on.
 
